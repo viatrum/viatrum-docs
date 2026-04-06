@@ -1033,7 +1033,9 @@ X-Environment: SANDBOX
 | trackerId | string | Опциональный ID для отслеживания (если передан) |
 | status | string | Новый статус транзакции |
 | amount | string | Сумма транзакции |
+| amountUsdt | string | Сумма транзакции в USDT |
 | commission | string | Комиссия |
+| rate | string | Курс |
 | currency | string | Валюта |
 | bank | string | Банк |
 | method | string | Метод платежа/выплаты |
