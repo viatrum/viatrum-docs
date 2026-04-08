@@ -709,6 +709,7 @@ Signature: 3336894fc8ebe05d47e96eca553ee3ca59863ae8d41a25a42d92b71df5e0e95b4490c
     "bank": "Озон Банк (Ozon)",
     "method": "CARD",
     "receiver": "2200154965960000",
+    "paymentLink": "https://pay.tinkoff.ru/link/1234567890",
     "holder": "Иванов Иван Иванович",
     "description": "Тестовая оплата",
     "createdAt": "2025-01-01T12:00:00Z",
@@ -805,6 +806,7 @@ Signature: 3336894fc8ebe05d47e96eca553ee3ca59863ae8d41a25a42d92b71df5e0e95b4490c
     "bank": "Озон Банк (Ozon)",
     "method": "CARD",
     "receiver": "2202206212345678",
+    "paymentLink": "https://pay.tinkoff.ru/link/1234567890",
     "holder": "IVAN IVANOV",
     "description": "Тестовая оплата",
     "createdAt": "2024-01-01T12:00:00Z",
@@ -999,6 +1001,7 @@ X-Environment: SANDBOX
   "bank": "Озон Банк (OZON)",
   "method": "CARD",
   "receiver": "2200154965960000",
+  "paymentLink": "https://pay.tinkoff.ru/link/1234567890",
   "holder": "Иванов Иван Иванович",
   "description": "Тестовая транзакция",
   "timestamp": "2024-01-01T12:00:00Z"
@@ -1040,6 +1043,7 @@ X-Environment: SANDBOX
 | bank | string | Банк |
 | method | string | Метод платежа/выплаты |
 | receiver | string | Реквизиты получателя |
+| paymentLink | string | Ссылка на оплату |
 | holder | string | Имя держателя карты |
 | description | string | Описание транзакции |
 | timestamp | string | Время изменения статуса в формате ISO 8601 |
