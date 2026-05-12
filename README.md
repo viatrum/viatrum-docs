@@ -1,569 +1,236 @@
-# API Документация Viatrum
+# Viatrum Merchant API
 
-## Краткая логика работы API
-API **Viatrum** предоставляет инструменты для интеграции с платёжной системой, обеспечивая управление транзакциями, получение информации о балансе, банках, валютах и комиссиях, а также создание и обработку заявок на приём и выплату средств. Все запросы требуют аутентификации через подпись HMAC-SHA512, включающую путь запроса, тело (при наличии) и уникальный NONCE. Подпись формируется с использованием приватного ключа, а публичный ключ и NONCE передаются в заголовках. Для защиты от повторных запросов NONCE должен быть уникальным и больше предыдущего значения, хранимого в базе. Callback-уведомления отправляются на указанный URL при изменении статуса транзакций.
+Документация описывает внешний merchant API проекта Viatrum, который обслуживается backend-контроллерами с префиксом `/api/v1/*` и HMAC-аутентификацией.
 
-## Оглавление
-- [Введение](#введение)
-- [Аутентификация и подпись](#аутентификация-и-подпись)
-  - [Генерация подписи](#генерация-подписи)
-    - [JavaScript/Node.js](#javascriptnodejs)
-    - [PHP](#php)
-    - [Python](#python)
-  - [Важные особенности NONCE](#важные-особенности-nonce)
-  - [Формирование сообщения](#формирование-сообщения)
-  - [Обязательные заголовки](#обязательные-заголовки)
-- [API Endpoints](#api-endpoints)
-  - [Основные эндпоинты](#основные-эндпоинты)
-- [Выполнение запросов](#выполнение-запросов)
-  - [GET Запрос](#get-запрос)
-  - [POST Запрос](#post-запрос)
-- [Ответы API](#ответы-api)
-  - [Пример успешного ответа](#пример-успешного-ответа)
-  - [Пример ответа с ошибкой](#пример-ответа-с-ошибкой)
-- [Детальное описание API эндпоинтов](#детальное-описание-api-эндпоинтов)
-  - [1. Получение баланса](#1-получение-баланса)
-  - [2. Получение списка банков](#2-получение-списка-банков)
-  - [3. Получение списка валют](#3-получение-списка-валют)
-  - [4. Получение комиссий](#4-получение-комиссий)
-  - [5. Создание заявки на прием платежа (PayIn)](#5-создание-заявки-на-прием-платежа-payin)
-  - [6. Создание выплаты (PayOut)](#6-создание-выплаты-payout)
-  - [7. Получение информации о конкретной заявке](#7-получение-информации-о-конкретной-заявке)
-  - [8. Получение заявки PayOut по ID](#8-получение-заявки-payout-по-id)
-  - [9. Получение списка заявок](#9-получение-списка-заявок)
-- [Статусы транзакций](#статусы-транзакций)
-  - [PayIn статусы](#payin-статусы)
-  - [PayOut статусы](#payout-статусы)
-- [Обработка ошибок](#обработка-ошибок)
-  - [Коды ошибок](#коды-ошибок)
-- [Тестовые окружения](#тестовые-окружения)
-  - [Использование](#использование)
-  - [Поддерживаемые методы](#поддерживаемые-методы)
-- [Callback уведомления](#callback-уведомления)
-  - [Структура callback для PayIn](#структура-callback-для-payin)
-  - [Структура callback для PayOut](#структура-callback-для-payout)
-  - [Параметры callback](#параметры-callback)
-  - [Заголовки callback запроса](#заголовки-callback-запроса)
-  - [Безопасность callback уведомлений](#безопасность-callback-уведомлений)
-  - [Обработка callback в коде](#обработка-callback-в-коде)
-  - [Обработка callback](#обработка-callback)
-- [Поддержка](#поддержка)
-  
+Внутренние JWT-эндпоинты `/client/*`, `/admin/*`, `/telegram/*` и провайдерские webhook/integration endpoints в этот документ не входят.
 
-## Введение
-Добро пожаловать в документацию по API **Viatrum**. Наш API предназначен для безопасного взаимодействия между внешними системами и сервисами платформы. Он предоставляет доступ к операциям по управлению транзакциями, проверке баланса, созданию платёжных форм и выполнению выплат.
+---
 
-## Аутентификация и Подпись
-Для обеспечения безопасности нашего API все запросы должны быть подписаны с использованием подписи (Signature), сгенерированной с помощью приватного ключа (PrivateKey), который мы предоставляем нашим клиентам в Личном Кабинете. Подпись используется для проверки целостности и подлинности запросов.
+## 1. Базовый формат
 
-### Генерация Подписи
-Подпись генерируется с использованием алгоритма HMAC-SHA512. Ниже приведены примеры функций генерирования подписи (Signature) на JavaScript, PHP и Python:
+### Base URL
 
-#### JavaScript/Node.js
-```javascript
-const crypto = require('crypto');
-// Функция сортировки объекта по ключам
-function sortObjectKeys(obj) {
-  if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) {
-    return obj;
-  }
-  const sortedObj = {};
-  const keys = Object.keys(obj).sort();
-  for (const key of keys) {
-    sortedObj[key] = sortObjectKeys(obj[key]);
-  }
-  return sortedObj;
-}
-function generateSignature(path, body, nonce, privateKey) {
-  // Для POST запросов сортируем ключи в body
-  let bodyString = '';
-  if (body && typeof body === 'object') {
-    const sortedBodyObj = sortObjectKeys(body);
-    bodyString = JSON.stringify(sortedBodyObj);
-  }
-  // Формируем строку для подписи: path + body + nonce
-  const stringToSign = path + bodyString + nonce;
-  // Генерируем подпись HMAC-SHA512
-  const signature = crypto.createHmac('sha512', privateKey)
-    .update(stringToSign)
-    .digest('hex');
-  return {
-    stringToSign,
-    signature,
-    body: bodyString
-  };
-}
-// Пример использования для GET запроса
-const path = '/api/v1/balance';
-const body = null; // Пустое тело для GET запроса
-const nonce = generateNonce(); // Уникальное значение
-const privateKey = 'your_private_key_here';
-const result = generateSignature(path, body, nonce, privateKey);
-console.log('String to sign:', result.stringToSign);
-console.log('Signature:', result.signature);
-// Пример для POST запроса
-const postPath = '/api/v1/pay-in';
-const postBody = {
-  amount: "1000",
-  bankId: 1,
-  callbackURL: "https://test.com/callback",
-  currencyId: 1,
-  externalID: "test123",
-  method: "CARD"
-};
-const postResult = generateSignature(postPath, postBody, nonce, privateKey);
-console.log('POST String to sign:', postResult.stringToSign);
-console.log('POST Signature:', postResult.signature);
+```text
+https://<your-api-domain>
 ```
 
-#### PHP
-```php
-<?php
-function sortObjectKeys($obj) {
-    if ($obj === null || !is_array($obj)) {
-        return $obj;
-    }
-    ksort($obj);
-    foreach ($obj as $key => $value) {
-        $obj[$key] = sortObjectKeys($value);
-    }
-    return $obj;
-}
-function generateSignature($path, $body, $nonce, $privateKey) {
-    // Для POST запросов сортируем ключи в body
-    $bodyString = '';
-    if ($body && is_array($body)) {
-        $sortedBodyObj = sortObjectKeys($body);
-        $bodyString = json_encode($sortedBodyObj, JSON_UNESCAPED_SLASHES);
-    }
-    // Формируем строку для подписи: path + body + nonce
-    $stringToSign = $path . $bodyString . $nonce;
-    // Генерируем подпись HMAC-SHA512
-    $signature = hash_hmac('sha512', $stringToSign, $privateKey);
-    return [
-        'stringToSign' => $stringToSign,
-        'signature' => $signature,
-        'body' => $bodyString
-    ];
-}
-// Пример использования для GET запроса
-$path = '/api/v1/balance';
-$body = null; // Пустое тело для GET запроса
-$nonce = generateNonce(); // Уникальное значение
-$privateKey = 'your_private_key_here';
-$result = generateSignature($path, $body, $nonce, $privateKey);
-echo 'String to sign: ' . $result['stringToSign'] . PHP_EOL;
-echo 'Signature: ' . $result['signature'] . PHP_EOL;
-// Пример для POST запроса
-$postPath = '/api/v1/pay-in';
-$postBody = [
-    'amount' => "1000",
-    'bankId' => 1,
-    'callbackURL' => "https://test.com/callback",
-    'currencyId' => 1,
-    'externalID' => "test123",
-    'method' => "CARD"
-];
-$postResult = generateSignature($postPath, $postBody, $nonce, $privateKey);
-echo 'POST String to sign: ' . $postResult['stringToSign'] . PHP_EOL;
-echo 'POST Signature: ' . $postResult['signature'] . PHP_EOL;
-?>
+Все публичные merchant endpoints начинаются с:
+
+```text
+/api/v1
 ```
 
-#### Python
-```python
-import hmac
-import hashlib
-import json
-def sort_object_keys(obj):
-    if obj is None or not isinstance(obj, dict):
-        return obj
-    sorted_obj = {}
-    for key in sorted(obj.keys()):
-        sorted_obj[key] = sort_object_keys(obj[key])
-    return sorted_obj
-def generate_signature(path, body, nonce, private_key):
-    # Для POST запросов сортируем ключи в body
-    body_string = ''
-    if body and isinstance(body, dict):
-        sorted_body_obj = sort_object_keys(body)
-        body_string = json.dumps(sorted_body_obj, separators=(',', ':'))
-   
-    # Формируем строку для подписи: path + body + nonce
-    string_to_sign = path + body_string + str(nonce)
-   
-    # Генерируем подпись HMAC-SHA512
-    signature = hmac.new(
-        private_key.encode('utf-8'),
-        string_to_sign.encode('utf-8'),
-        hashlib.sha512
-    ).hexdigest()
-   
-    return {
-        'stringToSign': string_to_sign,
-        'signature': signature,
-        'body': body_string
-    }
-# Пример использования для GET запроса
-path = '/api/v1/balance'
-body = None # Пустое тело для GET запроса
-nonce = generate_nonce() # Уникальное значение
-private_key = 'your_private_key_here'
-result = generate_signature(path, body, nonce, private_key)
-print('String to sign:', result['stringToSign'])
-print('Signature:', result['signature'])
-# Пример для POST запроса
-post_path = '/api/v1/pay-in'
-post_body = {
-    'amount': "1000",
-    'bankId': 1,
-    'callbackURL': "https://test.com/callback",
-    'currencyId': 1,
-    'externalID': "test123",
-    'method': "CARD"
-}
-post_result = generate_signature(post_path, post_body, nonce, private_key)
-print('POST String to sign:', post_result['stringToSign'])
-print('POST Signature:', post_result['signature'])
-```
+### Формат успешного ответа
 
-#### C#
-```csharp
-using System;
-using System.Linq;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
-
-public static class JsonCanonicalizer
-{
-    // Канонизация из объекта (POCO → JSON c отсортированными ключами)
-    public static string Canonicalize(object body)
-    {
-        if (body == null) return string.Empty;
-        var token = JToken.FromObject(body);
-        var sorted = SortToken(token);
-        return JsonConvert.SerializeObject(sorted, Formatting.None);
-    }
-
-    // Канонизация из JSON-строки
-    public static string Canonicalize(string json)
-    {
-        if (string.IsNullOrWhiteSpace(json)) return string.Empty;
-        var token = JToken.Parse(json);
-        var sorted = SortToken(token);
-        return JsonConvert.SerializeObject(sorted, Formatting.None);
-    }
-
-    private static JToken SortToken(JToken token)
-    {
-        if (token is JObject obj)
-        {
-            var sortedObj = new JObject();
-            foreach (var prop in obj.Properties().OrderBy(p => p.Name, StringComparer.Ordinal))
-                sortedObj[prop.Name] = SortToken(prop.Value);
-            return sortedObj;
-        }
-        if (token is JArray arr)
-        {
-            var newArr = new JArray();
-            foreach (var item in arr)
-                newArr.Add(SortToken(item));
-            return newArr;
-        }
-        return token; // примитивы как есть
-    }
-}
-```
-
-```csharp
-using System;
-using System.Security.Cryptography;
-using System.Text;
-
-public static class ViatrumSignature
-{
-    public static string ComputeSignature(string path, string bodyString, string nonce, string privateKey)
-    {
-        string stringToSign = path + bodyString + nonce;
-        using var hmac = new HMACSHA512(Encoding.UTF8.GetBytes(privateKey));
-        var hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(stringToSign));
-        return BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant();
-    }
-}
-```
-
-### Важные особенности NONCE
-**Проблема с NONCE:**
-- Система запоминает использованные NONCE для каждого мерчанта в поле `lastNonce` (используется для защиты от replay-атак)
-- Повторное использование NONCE приводит к ошибке `invalid NONCE (код 2007)`
-- NONCE должен быть больше `lastNonce` в базе данных
-- Каждый NONCE может быть использован только один раз
-
-**Решение:**
-
-#### JavaScript/Node.js
-```javascript
-let counter = 0;
-function generateNonce() {
-  const timePart = Date.now(); // 13 цифр (мс до 2286)
-  const counterPart = (counter++ % 1000).toString().padStart(3, "0"); // 3 цифры
-  const randomPart = Math.floor(Math.random() * 100).toString().padStart(2, "0"); // 2 цифры
-  return parseInt(`${timePart}${counterPart}${randomPart}`);
-}
-const nonce = generateNonce();
-```
-
-#### PHP
-```php
-<?php
-function generateNonce() {
-    static $counter = 0;
-    $timePart = (string) round(microtime(true) * 1000); // 13 цифр
-    $counterPart = str_pad(($counter++ % 1000), 3, "0", STR_PAD_LEFT); // 3 цифры
-    $randomPart = str_pad(mt_rand(0, 99), 2, "0", STR_PAD_LEFT); // 2 цифры
-   
-    return (int) ($timePart . $counterPart . $randomPart);
-}
-$nonce = generateNonce();
-?>
-```
-
-#### Python
-```python
-import time
-import random
-def generate_nonce():
-    counter = 0
-    def inner():
-        nonlocal counter
-        time_part = str(int(time.time() * 1000)) # 13 цифр
-        counter_part = str(counter % 1000).zfill(3) # 3 цифры
-        random_part = str(random.randint(0, 99)).zfill(2) # 2 цифры
-        counter += 1
-        return int(time_part + counter_part + random_part)
-    return inner()
-nonce = generate_nonce()
-```
-
-#### C#
-```csharp
-using System;
-using System.Security.Cryptography;
-using System.Threading;
-
-public static class NonceGenerator
-{
-    private static int _counter = 0; // потокобезопасный счётчик
-
-    // 18-значное значение: TTTTTTTTTTTTT CCC RR → строкой
-    public static string GenerateNonce()
-    {
-        string timePart = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString(); // 13
-        string counterPart = (Interlocked.Increment(ref _counter) % 1000).ToString().PadLeft(3, '0'); // 3
-        string randomPart = RandomNumberGenerator.GetInt32(0, 100).ToString().PadLeft(2, '0'); // 2
-        return $"{timePart}{counterPart}{randomPart}";
-    }
-
-    // Опционально: как long (используйте осторожно)
-    public static long GenerateNonceAsLong()
-    {
-        return long.Parse(GenerateNonce());
-    }
-}
-```
-
-##### Принцип работы
-Функция генерирует уникальный идентификатор на основе текущего времени в миллисекундах, счётчика и случайного числа. Это обеспечивает высокую степень уникальности генерируемых значений.
-
-##### Структура nonce
-```
-TTTTTTTTTTTTTCCC RR
-├─ Время (13 цифр) - текущее время в миллисекундах (от 2286 года)
-├─ Счетчик (3 цифры) - счётчик (сбрасывается каждый день)
-└─ Случайность (2 цифры) - случайное число (от 0 до 99)
-```
-
-##### Ключевые параметры
-- **Время (timePart):** текущее время в миллисекундах (13 цифр).
-- **Счётчик (counterPart):** трёхзначный счётчик, который увеличивается с каждым вызовом функции и сбрасывается после достижения 999.
-- **Случайность (randomPart):** двухзначное случайное число (0-99), добавляющее дополнительную энтропию.
-
-##### Возвращаемое значение
-Функция возвращает целое число в формате BIGINT UNSIGNED (до 18 цифр), совместимое с большинством СУБД. Пример: ***172325680000000112***.
-
-##### Преимущества подхода
-- **Высокая уникальность:**
-  - 1,000,000 уникальных значений/мс (1,000 счётчик × 100 случайных)
-  - Поддержка до 1,000 RPS без коллизий
-- **Совместимость:**
-  - Работает с MySQL, PostgreSQL, Redis
-  - Автоматически конвертируется в BIGINT
-- **Простота реализации:**
-  - Не требует синхронизации между серверами
-  - Минимальные накладные расходы
-
-##### Минусы использования простого timestamp:
-- Не гарантирует уникальность при параллельных запросах
-- Может нарушать хронологический порядок
-- Уязвим к атакам повторного воспроизведения
-- Не масштабируется под высокие нагрузки
-- При множественных запросах в одну секунду возникают коллизии
-- Отсутствие дополнительной энтропии
-- Высокий риск повторного использования NONCE
-
-#### Как работает валидация
-1. Система сравнивает новый NONCE с lastNonce в базе данных
-2. Новый NONCE должен быть строго больше предыдущего
-3. При успешной валидации lastNonce обновляется в базе
-
-### Формирование Сообщения
-Сообщение (stringToSign), используемое для генерации подписи, формируется одинаково для всех типов запросов:
-**Формула**: `path + body + nonce`
-- **path** - путь к эндпоинту (например: `/api/v1/balance`)
-- **body** - JSON строка тела запроса (пустая строка для GET запросов)
-- **nonce** - уникальное числовое значение
-
-**⚠️ ВАЖНО**: Значение `nonce` ВСЕГДА добавляется в конец сообщения для подписи.
-
-#### <span style="color:red">
-*JSON ключи в теле (body) и query параметры запроса должны идти в алфавитном порядке!* </span>
-
-#### Пример формирования сообщения для GET запроса:
-- **URL**: `/api/v1/balance`
-- **nonce**: `1721585422` - уникальное числовое значение
-- **Сообщение для подписи**: `/api/v1/balance1721585422`
-
-#### Пример формирования сообщения для POST запроса:
-- **path**: `/api/v1/pay-in`
-- **nonce**: `1721585422`
-- **Тело запроса**: `{"amount":"1000","bankId":1,"callbackURL":"https://test.com/callback","currencyId":1,"externalID":"test123","method":"CARD"}`
-- **Сообщение для подписи**: `/api/v1/pay-in{"amount":"1000","bankId":1,"callbackURL":"https://test.com/callback","currencyId":1,"externalID":"test123","method":"CARD"}1721585422`
-
-### Обязательные заголовки
-Каждый запрос к API должен включать следующие заголовки:
-- **Content-Type**: `application/json`
-- **Public-Key**: Ваш публичный ключ, предоставленный *Viatrum*
-- **nonce**: Уникальное числовое значение для предотвращения повторных запросов (должно быть больше предыдущего)
-- **Signature**: Подпись HMAC-SHA512, сгенерированная с использованием вашего приватного ключа
-
-#### Пример заголовков
-```http
-Content-Type: application/json
-nonce: 1717025133
-Public-Key: your_public_key_here
-Signature: 2816894fc8ebe05d47e96eca553ee3ca59863ae8d41a25a42d92b71df5e0e95b4490cfc8ff180e7575c5dbbc643ab3842ca05ae8bbb9f08e57c58cab748f8677
-```
-
-## API Endpoints
-
-### Основные эндпоинты
-| Метод | Эндпоинт | Описание |
-|-------|----------|----------|
-| GET | `/api/v1/balance` | Получение баланса |
-| GET | `/api/v1/banks` | Получение списка банков |
-| GET | `/api/v1/currencies` | Получение списка валют |
-| GET | `/api/v1/commissions` | Получение комиссий |
-| POST | `/api/v1/pay-in` | Создание заявки на прием платежа |
-| GET | `/api/v1/pay-in/list` | Получение списка заявок PayIn |
-| GET | `/api/v1/pay-in/{id}` | Получение заявки PayIn по ID |
-| POST | `/api/v1/pay-out` | Создание выплаты |
-| GET | `/api/v1/pay-out/list` | Получение списка заявок PayOut |
-| GET | `/api/v1/pay-out/{id}` | Получение заявки PayOut по ID |
-
-## Выполнение Запросов
-
-### GET Запрос
-Пример GET запроса для получения баланса:
-```http
-GET /api/v1/balance HTTP/1.1
-Host: docs.viatrum.pro
-Content-Type: application/json
-nonce: 1717025133
-Public-Key: your_public_key_here
-Signature: 2816894fc8ebe05d47e96eca553ee3ca59863ae8d41a25a42d92b71df5e0e95b4490cfc8ff180e7575c5dbbc643ab3842ca05ae8bbb9f08e57c58cab748f8677
-```
-
-### POST Запрос
-Пример POST запроса для создания PayIn:
-```http
-POST /api/v1/pay-in HTTP/1.1
-Host: docs.viatrum.pro
-Content-Type: application/json
-nonce: 1717025134
-Public-Key: your_public_key_here
-Signature: 3336894fc8ebe05d47e96eca553ee3ca59863ae8d41a25a42d92b71df5e0e95b4490cfc8ff180e7575c5dbbc643ab3842ca05ae8bbb9f08e57c58cab748f8677
-{
-  "bankId": 1,
-  "externalID": "test_merchant_id_2",
-  "currencyId": 1,
-  "callbackURL": "https://example.com/callbacks/payment",
-  "description": "Test payment",
-  "amount": "1000",
-  "method": "CARD"
-}
-```
-
-## Ответы API
-Все ответы от API Viatrum возвращаются в формате JSON. Ответ включает в себя:
-- **success** - Статус запроса (true/false)
-- **data** - Данные, возвращенные API (только в случае успешного ответа)
-- **error** - Данные об ошибке (только в случае ошибочного ответа)
-
-### Пример успешного ответа
 ```json
 {
   "success": true,
-  "data": {
-    "balance": {
-      "payment": {
-        "currency": "USDT",
-        "available": "10260.76",
-        "frozen": "0"
-      },
-      "payout": {
-        "currency": "USDT",
-        "available": "0.00",
-        "frozen": "0.00"
-      }
-    }
-  }
+  "data": {}
 }
 ```
 
-### Пример ответа с ошибкой
+### Формат ошибки
+
 ```json
 {
   "success": false,
   "error": {
-    "message": "Invalid Signature",
+    "message": "invalid Signature",
     "code": 2005
   }
 }
 ```
 
-## Детальное описание API эндпоинтов
+`message` может быть строкой или массивом сообщений валидации. Все `Decimal`-значения в ответах сериализуются строками.
 
-### 1. Получение баланса
-**GET** `/api/v1/balance`
-Получение информации о балансе клиента.
+---
 
-#### Параметры запроса
-Нет параметров
+## 2. Аутентификация HMAC
+
+Каждый запрос к `/api/v1/*` должен быть подписан.
+
+### Обязательные headers
+
+| Header | Обязательный | Описание |
+|---|---:|---|
+| `Content-Type` | Да | `application/json` |
+| `Public-Key` | Да | Публичный ключ мерчанта. Также поддерживается legacy header `Api-Key`. |
+| `Nonce` | Да | Числовое значение, больше предыдущего. Также поддерживается legacy header `Expires`. |
+| `Signature` | Да | HMAC-SHA512 подпись. |
+| `X-Environment` | Нет | `PRODUCTION`, `SANDBOX` или `TEST`. По умолчанию `PRODUCTION`. |
+
+### Важное про `Nonce`
+
+В текущей реализации `Nonce` одновременно используется как защита от replay и как время жизни запроса:
+
+1. Значение должно быть числом.
+2. Значение должно быть строго больше предыдущего успешного `Nonce` этого мерчанта.
+3. Значение должно быть больше текущего времени сервера в миллисекундах, иначе будет ошибка `request timeout`.
+
+Практический вариант: передавайте будущий timestamp в миллисекундах, например `Date.now() + 300000`, и добавляйте небольшой монотонный счетчик для параллельных запросов.
+
+```javascript
+let counter = 0;
+
+function generateNonce() {
+  const expiresAtMs = Date.now() + 5 * 60 * 1000;
+  const suffix = String(counter++ % 1000).padStart(3, '0');
+  return `${expiresAtMs}${suffix}`;
+}
+```
+
+### Строка для подписи
+
+```text
+path + bodyString + nonce
+```
+
+Где:
+
+| Часть | Описание |
+|---|---|
+| `path` | Только pathname без домена и query string. Например `/api/v1/pay-in/list`. |
+| `bodyString` | Для `POST`, `PUT`, `PATCH` — JSON body с отсортированными ключами. Для `GET` — пустая строка. |
+| `nonce` | То же значение, которое передается в header `Nonce`. |
+
+Query параметры в текущей backend-реализации **не входят** в подпись. Например запрос:
+
+```text
+GET /api/v1/pay-in/list?offset=0&limit=10
+```
+
+подписывается как:
+
+```text
+/api/v1/pay-in/list{nonce}
+```
+
+### JavaScript пример подписи
+
+```javascript
+const crypto = require('crypto');
+
+function sortObjectKeys(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return value;
+  }
+
+  return Object.keys(value)
+    .sort()
+    .reduce((acc, key) => {
+      acc[key] = sortObjectKeys(value[key]);
+      return acc;
+    }, {});
+}
+
+function signRequest({ path, method, body, nonce, privateKey }) {
+  const shouldSignBody = method.toUpperCase() !== 'GET' && body;
+  const bodyString = shouldSignBody
+    ? JSON.stringify(sortObjectKeys(body))
+    : '';
+
+  const stringToSign = `${path}${bodyString}${nonce}`;
+  const signature = crypto
+    .createHmac('sha512', privateKey)
+    .update(stringToSign)
+    .digest('hex');
+
+  return { stringToSign, signature };
+}
+
+const body = {
+  amount: '1000',
+  bankId: 1,
+  callbackURL: 'https://merchant.example/callback',
+  currencyId: 1,
+  externalID: 'order_10001',
+  method: 'CARD'
+};
+
+const nonce = generateNonce();
+const { stringToSign, signature } = signRequest({
+  path: '/api/v1/pay-in',
+  method: 'POST',
+  body,
+  nonce,
+  privateKey: 'your_private_key'
+});
+```
+
+---
+
+## 3. Окружения
+
+Окружение выбирается header-ом:
+
+```http
+X-Environment: SANDBOX
+```
+
+Поддерживаемые значения:
+
+| Значение | Описание |
+|---|---|
+| `PRODUCTION` | Продакшн. Используется по умолчанию. |
+| `SANDBOX` | Песочница. Также включается через `X-Sandbox-Mode: true`. |
+| `TEST` | Тестовое окружение. Также включается через `X-Test-Mode: true`. |
+
+Backend добавляет в ответ диагностические headers:
+
+```http
+X-Current-Environment: SANDBOX
+X-Test-Mode: true
+```
+
+---
+
+## 4. Endpoints
+
+| Метод | Endpoint | Описание |
+|---|---|---|
+| `GET` | `/api/v1/balance` | Баланс мерчанта. |
+| `GET` | `/api/v1/banks` | Активные банки текущего окружения. |
+| `GET` | `/api/v1/currencies` | Активные валюты. |
+| `GET` | `/api/v1/commissions` | Персональные комиссии мерчанта. |
+| `POST` | `/api/v1/pay-in` | Создание PayIn заявки. |
+| `GET` | `/api/v1/pay-in/list` | Список PayIn заявок. |
+| `GET` | `/api/v1/pay-in/{id}` | Получение PayIn заявки по ID. |
+| `PATCH` | `/api/v1/pay-in/{id}/cancel` | Отмена PayIn заявки. |
+| `POST` | `/api/v1/pay-in/{id}/send-callback` | Ручная отправка callback по PayIn. |
+| `POST` | `/api/v1/pay-in/appeals` | Создание апелляции по PayIn. |
+| `GET` | `/api/v1/pay-in/appeals` | Список апелляций. |
+| `GET` | `/api/v1/pay-in/appeals/{id}` | Апелляция по ID. |
+| `GET` | `/api/v1/pay-in/excel-report` | Данные для Excel-отчета. |
+| `POST` | `/api/v1/pay-out` | Создание PayOut заявки. |
+| `GET` | `/api/v1/pay-out/list` | Список PayOut заявок. |
+| `GET` | `/api/v1/pay-out/{id}` | Получение PayOut заявки по ID. |
+| `PUT` | `/api/v1/pay-out/{id}/status/{status}` | Обновление статуса PayOut. |
+
+---
+
+## 5. Справочники
+
+### 5.1. Баланс
+
+```http
+GET /api/v1/balance
+```
 
 #### Пример ответа
+
 ```json
 {
   "success": true,
   "data": {
     "balance": {
       "payment": {
-        "currency": "USDT",
+        "currency": "RUB",
         "available": "10260.76",
         "frozen": "0"
       },
       "payout": {
-        "currency": "USDT",
-        "available": "0.00",
+        "currency": "RUB",
+        "available": "5000.00",
         "frozen": "0.00"
       }
     }
@@ -571,36 +238,44 @@ Signature: 3336894fc8ebe05d47e96eca553ee3ca59863ae8d41a25a42d92b71df5e0e95b4490c
 }
 ```
 
-### 2. Получение списка банков
-**GET** `/api/v1/banks`
-Получение списка доступных банков для проведения операций.
+### 5.2. Банки
 
-#### Заголовки
-- `X-Environment`: SANDBOX | PRODUCTION (опционально, по умолчанию PRODUCTION)
+```http
+GET /api/v1/banks
+```
+
+Возвращаются только активные банки выбранного окружения.
 
 #### Пример ответа
+
 ```json
 {
   "success": true,
   "data": [
     {
       "id": 1,
-      "name": "МежБанк",
-      "key": "ANY_BANK",
+      "name": "Сбер",
+      "key": "SBER",
+      "currency": "RUB"
+    },
+    {
+      "id": 2,
+      "name": "Т-Банк",
+      "key": "TBANK",
       "currency": "RUB"
     }
   ]
 }
 ```
 
-* **ANY_BANK**: Это специальный ключ, обозначающий любой банк. Он позволяет использовать универсальный метод платежа/выплаты, не привязанный к конкретному банку. Рекомендуется для случаев, когда выбор банка не критичен или для автоматизированных систем.
+### 5.3. Валюты
 
-
-### 3. Получение списка валют
-**GET** `/api/v1/currencies`
-Получение списка поддерживаемых валют.
+```http
+GET /api/v1/currencies
+```
 
 #### Пример ответа
+
 ```json
 {
   "success": true,
@@ -614,580 +289,797 @@ Signature: 3336894fc8ebe05d47e96eca553ee3ca59863ae8d41a25a42d92b71df5e0e95b4490c
       "id": 2,
       "name": "USDT",
       "key": "USDT"
-    },
-    {
-      "id": 3,
-      "name": "USDTУзбекский сом",
-      "key": "UZS"
     }
   ]
 }
 ```
 
-### 4. Получение комиссий
-**GET** `/api/v1/commissions`
-Получение информации о комиссиях (доступно только для ADMIN и SUPER_ADMIN).
+### 5.4. Комиссии
 
-#### Заголовки
-- `X-Environment`: SANDBOX | PRODUCTION (опционально)
+```http
+GET /api/v1/commissions
+```
+
+Возвращает персональные комиссии текущего мерчанта.
 
 #### Пример ответа
+
 ```json
 {
   "success": true,
   "data": {
     "payIn": [
       {
-        "bank": "МежБанк",
+        "bank": "Сбер",
         "percent": 10.6,
         "min_amount": 1000,
         "max_amount": 100000
-      },
-      {
-        "bank": "ПСБ",
-        "percent": 10.6,
-        "min_amount": 1000,
-        "max_amount": 200000
       }
     ],
-    "payOut": []
+    "payOut": [
+      {
+        "bank": "Сбер",
+        "percent": 5,
+        "min_amount": 1000,
+        "max_amount": 100000
+      }
+    ]
   }
 }
 ```
 
-### 5. Создание заявки на прием платежа (PayIn)
-**POST** `/api/v1/pay-in`
-Создание новой заявки на прием платежа.
+---
 
-#### Параметры запроса
-| Параметр | Тип | Обязательный | Описание | Пример |
-|----------|-----|--------------|----------|----------|
-| bankId | number | Да | ID банка | 1 |
-| externalID | string | Да | Уникальный ID в системе мерчанта (1-64 символа) | "test_merchant_id_2" |
-| currencyId | number | Да | ID валюты | 1 |
-| callbackURL | string | Нет | URL для получения callback | "https://example.com/callback" |
-| description | string | Нет | Описание платежа | "Test payment" |
-| amount | string | Да | Сумма платежа | "1000" |
-| method | string | Да | Метод платежа: [Поддерживаемые методы](#поддерживаемые-методы) | "CARD" |
+## 6. PayIn
+
+### 6.1. Создание PayIn
+
+```http
+POST /api/v1/pay-in
+```
+
+#### Body
+
+| Поле | Тип | Обязательное | Описание |
+|---|---|---:|---|
+| `bankId` | number | Да | ID банка из `/api/v1/banks`. |
+| `externalID` | string | Да | Уникальный ID заявки в системе мерчанта. 1–64 символа: латиница, цифры, `_`, `-`. |
+| `currencyId` | number | Да | ID валюты из `/api/v1/currencies`. |
+| `callbackURL` | string | Нет | URL для callback-уведомлений. Должен быть `http` или `https`. |
+| `description` | string | Нет | Описание заявки. |
+| `amount` | string | Да | Сумма в нативной валюте, максимум 2 знака после точки. |
+| `method` | string | Да | Метод PayIn. См. [методы PayIn](#62-методы-payin). |
 
 #### Пример запроса
+
 ```json
 {
   "bankId": 1,
-  "externalID": "test_merchant_id_2",
+  "externalID": "order_10001",
   "currencyId": 1,
-  "callbackURL": "https://example.com/callbacks/payment",
-  "description": "",
-  "amount": "6543",
+  "callbackURL": "https://merchant.example/callbacks/payin",
+  "description": "Order #10001",
+  "amount": "6543.00",
   "method": "CARD"
 }
 ```
 
-#### Описание полей:
-- `bankId` (number) - ID банка
-- `externalID` (string) - Ваш уникальный ID заявки (1-64 символа, только латинские буквы, цифры, дефис и подчеркивание)
-- `currencyId` (number) - ID валюты
-- `callbackURL` (string, optional) - URL для получения callback уведомлений
-- `description` (string, optional) - Описание платежа
-- `amount` (string) - Сумма транзакции (число с не более чем 2 знаками после запятой)
-- `method` (string) - Метод перевода: [Поддерживаемые методы](#поддерживаемые-методы)
+#### Универсальный ответ PayIn
 
-#### Пример ответа
 ```json
 {
   "success": true,
   "data": {
-    "id": "uuid-here",
-    "externalID": "test_merchant_id_2",
-    "trackerId": "f5ef6b73-0952-4602-a306-82ef1f755f85",
-    "status": "PROCESSING",
-    "amount": "2296",
-    "amountUsdt": "28.4616",
-    "commission": "4.2692",
-    "rate": "80.67",
-    "currency": "RUB",
-    "bank": "Озон Банк (Ozon)",
+    "id": "e42e0768-d913-4b4b-8708-f94cfeaf0777",
+    "externalID": "order_10001",
+    "trackerID": "provider-operation-id",
     "method": "CARD",
-    "receiver": "2200154965960000",
-    "paymentLink": "https://pay.tinkoff.ru/link/1234567890",
+    "amount": "6543",
+    "amountUsdt": "80.6683",
+    "commission": "4.2692",
+    "rate": "81.17",
+    "currency": "RUB",
+    "bank": "Сбер",
+    "status": "PROCESSING",
     "holder": "Иванов Иван Иванович",
-    "description": "Тестовая оплата",
-    "createdAt": "2025-01-01T12:00:00Z",
-    "updatedAt": "2025-01-01T12:00:00Z"
+    "receiver": "2200154965960000",
+    "cardNumber": "2200154965960000",
+    "phoneNumber": null,
+    "accountNumber": null,
+    "payment_link": null,
+    "image_qr": null,
+    "timeoutAt": "2026-05-12T14:30:00.000Z",
+    "description": "Order #10001",
+    "createdAt": "2026-05-12T14:15:00.000Z",
+    "updatedAt": "2026-05-12T14:15:02.000Z"
   }
 }
 ```
 
-### 6. Создание выплаты (PayOut)
-**POST** `/api/v1/pay-out`
-Создание новой заявки на выплату.
+### 6.2. Методы PayIn
 
-#### Параметры запроса
-| Параметр | Тип | Обязательный | Описание | Пример |
-|----------|-----|--------------|----------|----------|
-| externalID | string | Да | Уникальный ID в системе мерчанта | "test_payout_123" |
-| bankId | number | Да | ID банка | 1 |
-| method | string | Да | Метод выплаты: CARD, SBP, ACCOUNT | "CARD" |
-| currencyId | number | Да | ID валюты | 1 |
-| callbackURL | string | Да | URL для получения callback | "https://example.com/callback" |
-| amount | string | Да | Сумма выплаты | "5000" |
-| receiver | string | Да | Реквизиты получателя | "4000000000000000" |
-| holder | string | Да | Имя получателя | "Иванов Иван Иванович" |
+| Метод | Описание | Основной реквизит в ответе |
+|---|---|---|
+| `CARD` | Перевод на карту. | `receiver` / `cardNumber` |
+| `SBP` | Перевод по СБП. | `receiver` / `phoneNumber` |
+| `ACCOUNT` | Перевод на банковский счет. | `receiver` / `accountNumber` |
+| `NSPK` | Оплата по QR/NSPK-ссылке. | `payment_link`; для UI ссылка также дублируется в `receiver`. |
+| `PAYMENT_LINK` | Ссылка на оплату / внутрибанковский QR-link. | `payment_link`; для UI ссылка также дублируется в `receiver`. |
+| `CROSSBORDER_CARD` | Трансграничный перевод картой. | `receiver` / `cardNumber` |
+| `CROSSBORDER_SBP` | Трансграничный перевод по телефону. | `receiver` / `phoneNumber` |
+| `M2ARM_SBP` | Армения, перевод по телефону. | `receiver` / `phoneNumber` |
+| `M2ABH_SBP` | Абхазия, СБП. | `receiver` / `phoneNumber` |
+| `M2TJS_SBP` | Таджикистан, перевод по телефону. | `receiver` / `phoneNumber` |
+| `M2ABH_C2C` | Абхазия, карта. | `receiver` / `cardNumber` |
+| `M2ARM_C2C` | Армения, карта. | `receiver` / `cardNumber` |
+| `M2TJS_C2C` | Таджикистан, карта. | `receiver` / `cardNumber` |
+| `C2C_WT` | Карта, white triangle. | `receiver` / `cardNumber` |
+| `SBP_WT` | СБП, white triangle. | `receiver` / `phoneNumber` |
+| `SBER2SBER` | Внутрибанковский Сбер → Сбер. | `receiver` |
+| `ALFA2ALFA` | Внутрибанковский Альфа → Альфа. | `receiver` |
+| `VTB2VTB` | Внутрибанковский ВТБ → ВТБ. | `receiver` |
+| `TBANK2TBANK` | Внутрибанковский Т-Банк → Т-Банк. | `receiver` |
+| `OZON2OZON` | Внутрибанковский Озон → Озон. | `receiver` |
+| `SIM` | SIM-реквизит. | `receiver` |
+| `ALFA_QR` | Альфа QR. | `payment_link` / `image_qr` |
 
-#### Пример запроса
+### 6.3. Контракт ссылок и QR
+
+В публичном API нет отдельного поля `nspk_url`. Любая ссылка для оплаты возвращается в `payment_link`.
+
+| Поле | Назначение |
+|---|---|
+| `payment_link` | Главная ссылка, которую мерчант может открыть или показать плательщику. Для `NSPK` сюда попадает provider `payment_url`; для `PAYMENT_LINK` — provider `payment_link`. |
+| `receiver` | Реквизит получателя. Для `NSPK` и `PAYMENT_LINK` текущий контракт дублирует сюда `payment_link`, чтобы ссылка была видна в UI как реквизит. |
+| `image_qr` | Ссылка на изображение QR-кода, если провайдер его возвращает. |
+| `cardNumber`, `phoneNumber`, `accountNumber` | Нормализованные реквизиты для классических методов, если доступны. |
+
+Правило для интеграций:
+
+```text
+merchant-visible payment link = payment_link
+```
+
+Не используйте `paymentLink`, `nspkURL`, `NSPKurl` во внешнем контракте merchant API — это внутренние или старые поля.
+
+### 6.4. Пример PayIn `CARD`
+
 ```json
 {
-  "externalID": "test_payout_123",
+  "success": true,
+  "data": {
+    "id": "9c1f74d7-9b45-4372-aee7-026102d8e8cc",
+    "externalID": "order_card_10001",
+    "trackerID": "tr_123",
+    "method": "CARD",
+    "amount": "5000",
+    "amountUsdt": "61.58",
+    "commission": "3.69",
+    "rate": "81.20",
+    "currency": "RUB",
+    "bank": "Сбер",
+    "status": "PROCESSING",
+    "holder": "Иванов Иван Иванович",
+    "receiver": "2200154965960000",
+    "cardNumber": "2200154965960000",
+    "phoneNumber": null,
+    "accountNumber": null,
+    "payment_link": null,
+    "image_qr": null,
+    "timeoutAt": "2026-05-12T14:30:00.000Z",
+    "description": "Order #10001",
+    "createdAt": "2026-05-12T14:15:00.000Z",
+    "updatedAt": "2026-05-12T14:15:02.000Z"
+  }
+}
+```
+
+### 6.5. Пример PayIn `SBP`
+
+```json
+{
+  "success": true,
+  "data": {
+    "id": "93ef6cbf-d1bd-49b0-bc81-31bf1c98f7d2",
+    "externalID": "order_sbp_10002",
+    "trackerID": "tr_124",
+    "method": "SBP",
+    "amount": "3500",
+    "amountUsdt": "43.10",
+    "commission": "2.59",
+    "rate": "81.20",
+    "currency": "RUB",
+    "bank": "Т-Банк",
+    "status": "PROCESSING",
+    "holder": "Петров Петр Петрович",
+    "receiver": "79991234567",
+    "cardNumber": null,
+    "phoneNumber": "79991234567",
+    "accountNumber": null,
+    "payment_link": null,
+    "image_qr": null,
+    "timeoutAt": "2026-05-12T14:30:00.000Z",
+    "description": "Order #10002",
+    "createdAt": "2026-05-12T14:15:00.000Z",
+    "updatedAt": "2026-05-12T14:15:02.000Z"
+  }
+}
+```
+
+### 6.6. Пример PayIn `NSPK`
+
+Для `NSPK` provider `payment_url` отдается мерчанту как `payment_link`. Поле `receiver` содержит ту же ссылку для отображения в UI.
+
+#### Request
+
+```json
+{
   "bankId": 1,
-  "method": "CARD",
+  "externalID": "order_nspk_10003",
   "currencyId": 1,
-  "callbackURL": "https://example.com/callbacks/payout",
-  "amount": "5000",
-  "receiver": "4000000000000000",
+  "callbackURL": "https://merchant.example/callbacks/payin",
+  "description": "NSPK order #10003",
+  "amount": "1000.00",
+  "method": "NSPK"
+}
+```
+
+#### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "id": "1e6ba508-4b9d-45a0-b297-9f8b14ce7d9b",
+    "externalID": "order_nspk_10003",
+    "trackerID": "tr_nspk_125",
+    "method": "NSPK",
+    "amount": "1000",
+    "amountUsdt": "12.31",
+    "commission": "0.74",
+    "rate": "81.20",
+    "currency": "RUB",
+    "bank": "Сбер",
+    "status": "PROCESSING",
+    "holder": null,
+    "receiver": "https://qr.nspk.ru/BS1A0000000000000000000000000000?type=01&bank=100000000111&crc=ABCD",
+    "cardNumber": null,
+    "phoneNumber": null,
+    "accountNumber": null,
+    "payment_link": "https://qr.nspk.ru/BS1A0000000000000000000000000000?type=01&bank=100000000111&crc=ABCD",
+    "image_qr": null,
+    "timeoutAt": "2026-05-12T14:30:00.000Z",
+    "description": "NSPK order #10003",
+    "createdAt": "2026-05-12T14:15:00.000Z",
+    "updatedAt": "2026-05-12T14:15:02.000Z"
+  }
+}
+```
+
+### 6.7. Пример PayIn `PAYMENT_LINK`
+
+Для `PAYMENT_LINK` provider `payment_link` отдается мерчанту как `payment_link`. Поле `receiver` содержит ту же ссылку для отображения в UI.
+
+#### Request
+
+```json
+{
+  "bankId": 1,
+  "externalID": "order_link_10004",
+  "currencyId": 1,
+  "callbackURL": "https://merchant.example/callbacks/payin",
+  "description": "Payment link order #10004",
+  "amount": "1000.00",
+  "method": "PAYMENT_LINK"
+}
+```
+
+#### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "id": "3bff84f7-b54c-4308-81db-a2e7697c7003",
+    "externalID": "order_link_10004",
+    "trackerID": "tr_link_126",
+    "method": "PAYMENT_LINK",
+    "amount": "1000",
+    "amountUsdt": "12.31",
+    "commission": "0.74",
+    "rate": "81.20",
+    "currency": "RUB",
+    "bank": "Альфа-Банк",
+    "status": "PROCESSING",
+    "holder": null,
+    "receiver": "https://pay.example.com/order/3bff84f7-b54c-4308-81db-a2e7697c7003",
+    "cardNumber": null,
+    "phoneNumber": null,
+    "accountNumber": null,
+    "payment_link": "https://pay.example.com/order/3bff84f7-b54c-4308-81db-a2e7697c7003",
+    "image_qr": "https://pay.example.com/order/3bff84f7-b54c-4308-81db-a2e7697c7003/qr.png",
+    "timeoutAt": "2026-05-12T14:30:00.000Z",
+    "description": "Payment link order #10004",
+    "createdAt": "2026-05-12T14:15:00.000Z",
+    "updatedAt": "2026-05-12T14:15:02.000Z"
+  }
+}
+```
+
+### 6.8. Получение списка PayIn
+
+```http
+GET /api/v1/pay-in/list?offset=0&limit=10
+```
+
+Query параметры:
+
+| Параметр | Тип | По умолчанию | Описание |
+|---|---|---:|---|
+| `offset` | number | `0` | Смещение. |
+| `limit` | number | `10` | Количество записей, максимум `100`. |
+
+#### Пример ответа
+
+```json
+{
+  "success": true,
+  "data": {
+    "total": 2,
+    "items": [
+      {
+        "id": "1e6ba508-4b9d-45a0-b297-9f8b14ce7d9b",
+        "externalID": "order_nspk_10003",
+        "currencyId": 1,
+        "status": "PROCESSING",
+        "method": "NSPK",
+        "bank": "Сбер",
+        "amount": "1000",
+        "commission": "100",
+        "holder": null,
+        "receiver": "https://qr.nspk.ru/BS1A...",
+        "payment_link": "https://qr.nspk.ru/BS1A...",
+        "image_qr": null,
+        "createdTime": "2026-05-12T14:15:00.000Z",
+        "updatedTime": "2026-05-12T14:15:02.000Z"
+      }
+    ]
+  }
+}
+```
+
+### 6.9. Получение PayIn по ID
+
+```http
+GET /api/v1/pay-in/{id}
+```
+
+#### Пример ответа
+
+```json
+{
+  "success": true,
+  "data": {
+    "id": "1e6ba508-4b9d-45a0-b297-9f8b14ce7d9b",
+    "externalID": "order_nspk_10003",
+    "trackerID": "tr_nspk_125",
+    "amount": "1000",
+    "commission": "100",
+    "currency": "RUB",
+    "callback_url": "https://merchant.example/callbacks/payin",
+    "status": "PROCESSING",
+    "method": "NSPK",
+    "bank": "Сбер",
+    "merchant": {
+      "id": "merchant-id",
+      "username": "merchant-login"
+    },
+    "receiver": "https://qr.nspk.ru/BS1A...",
+    "payment_link": "https://qr.nspk.ru/BS1A...",
+    "image_qr": null,
+    "holder": null,
+    "cardNumber": null,
+    "phoneNumber": null,
+    "accountNumber": null,
+    "timeoutAt": "2026-05-12T14:30:00.000Z",
+    "createdTime": "2026-05-12T14:15:00.000Z",
+    "updatedTime": "2026-05-12T14:15:02.000Z"
+  }
+}
+```
+
+### 6.10. Отмена PayIn
+
+```http
+PATCH /api/v1/pay-in/{id}/cancel
+```
+
+Endpoint переводит заявку в `CANCELLED`, если отмена доступна.
+
+#### Пример ответа
+
+```json
+{
+  "success": true,
+  "data": {
+    "id": "1e6ba508-4b9d-45a0-b297-9f8b14ce7d9b",
+    "status": "CANCELLED"
+  }
+}
+```
+
+### 6.11. Ручная отправка PayIn callback
+
+```http
+POST /api/v1/pay-in/{id}/send-callback
+```
+
+Отправляет callback на `callbackURL`, сохраненный в PayIn заявке.
+
+---
+
+## 7. PayOut
+
+### 7.1. Создание PayOut
+
+```http
+POST /api/v1/pay-out
+```
+
+#### Body
+
+| Поле | Тип | Обязательное | Описание |
+|---|---|---:|---|
+| `externalID` | string | Да | Уникальный ID выплаты в системе мерчанта. |
+| `bank` | string | Да | Название банка. |
+| `method` | string | Да | `card`, `sbp`, `account`. |
+| `currencyId` | string | Да | Код валюты из 3 заглавных букв, например `RUB`. |
+| `callbackURL` | string | Да | URL для callback. |
+| `amount` | string | Да | Сумма выплаты, максимум 2 знака после точки. |
+| `receiver` | string | Да | Реквизит получателя. |
+| `holder` | string | Да | Имя получателя, 3–100 символов. |
+
+> В текущем backend-коде PayOut DTO и сервис используют разные представления банка/валюты. Таблица выше отражает DTO-контракт, который валидируется на входе. Если PayOut используется в production, нужно синхронизировать DTO, validators и service lookup.
+
+#### Пример запроса
+
+```json
+{
+  "externalID": "payout_10001",
+  "bank": "Сбер",
+  "method": "card",
+  "currencyId": "RUB",
+  "callbackURL": "https://merchant.example/callbacks/payout",
+  "amount": "5000.00",
+  "receiver": "2200154965960000",
   "holder": "Иванов Иван Иванович"
 }
 ```
 
-#### Описание полей:
-- `externalID` (string) - Ваш уникальный ID заявки (1-64 символа, только Латиница, цифры, дефис и подчеркивание)
-- `bankId` (number) - ID банка
-- `method` (string) - Метод перевода: `CARD`, `SBP`, `ACCOUNT`
-- `currencyId` (number) - ID валюты
-- `callbackURL` (string) - URL для получения callback уведомлений
-- `amount` (string) - Сумма выплаты (число с не более чем 2 знаками после запятой)
-- `receiver` (string) - Реквизит получателя (номер карты/телефон/счет)
-- `holder` (string) - Имя получателя (3-100 символов)
-
 #### Пример ответа
-```json
-{
-  "success": true,
-  "data": {
-    "id": "uuid-here",
-    "externalID": "test_payout_123",
-    "trackerID": "f5ef6b73-0952-4602-a306-82ef1f755f85",
-    "status": "PROCESSING",
-    "amount": "2296",
-    "amountUsdt": "28.4616",
-    "commission": "4.2692",
-    "rate": "80.67",
-    "currency": "RUB",
-    "bank": "OZON",
-    "method": "CARD",
-    "receiver": "4000000000000000",
-    "holder": "Иванов Иван Иванович",
-    "description": "Тестовая выплата",
-    "createdAt": "2025-01-01T12:00:00Z"
-  }
-}
-```
 
-### 7. Получение информации о конкретной заявке
-#### Получение заявки PayIn по ID
-**GET** `/api/v1/pay-in/{id}`
-
-#### Параметры URL
-- `id` - ID заявки в системе Viatrum
-
-#### Пример ответа
 ```json
 {
   "success": true,
   "data": {
     "id": "f5ef6b73-0952-4602-a306-82ef1f755f85",
-    "externalID": "test_merchant_id_1",
-    "trackerID": "f5ef6b73-0952-4602-a306-82ef1f755f85",
-    "status": "COMPLETED",
-    "amount": "2296",
-    "amountUsdt": "28.4616",
-    "commission": "4.2692",
-    "rate": "80.67",
-    "currency": "RUB",
-    "bank": "Озон Банк (Ozon)",
-    "method": "CARD",
-    "receiver": "2202206212345678",
-    "paymentLink": "https://pay.tinkoff.ru/link/1234567890",
-    "holder": "IVAN IVANOV",
-    "description": "Тестовая оплата",
-    "createdAt": "2024-01-01T12:00:00Z",
-    "updatedAt": "2024-01-01T12:05:00Z"
+    "externalID": "payout_10001",
+    "currencyId": 1,
+    "method": "card",
+    "amount": "5000",
+    "commission": "250",
+    "status": "CREATED",
+    "receiver": "2200154965960000",
+    "holder": "Иванов Иван Иванович",
+    "bank": "Сбер"
   }
 }
 ```
 
-### 8. Получение заявки PayOut по ID
-**GET** `/api/v1/pay-out/{id}`
+### 7.2. Получение списка PayOut
 
-#### Параметры URL
-- `id` - ID заявки
+```http
+GET /api/v1/pay-out/list?offset=0&limit=10
+```
 
 #### Пример ответа
+
+```json
+{
+  "success": true,
+  "data": {
+    "total": 1,
+    "items": [
+      {
+        "id": "f5ef6b73-0952-4602-a306-82ef1f755f85",
+        "externalID": "payout_10001",
+        "currencyId": 1,
+        "status": "CREATED",
+        "method": "card",
+        "bank": "Сбер",
+        "amount": "5000",
+        "commission": "250",
+        "receiver": "2200154965960000",
+        "createdTime": "2026-05-12T14:15:00.000Z"
+      }
+    ]
+  }
+}
+```
+
+### 7.3. Получение PayOut по ID
+
+```http
+GET /api/v1/pay-out/{id}
+```
+
+#### Пример ответа
+
 ```json
 {
   "success": true,
   "data": {
     "id": "f5ef6b73-0952-4602-a306-82ef1f755f85",
-    "externalID": "test_power_9",
-    "trackerID": "f5ef6b73-0952-4602-a306-82ef1f755f85",
-    "status": "PENDING",
-    "amount": "2296",
-    "amountUsdt": "28.4616",
-    "commission": "4.2692",
-    "rate": "80.67",
-    "currency": "RUB",
-    "bank": "Озон Банк (Ozon)",
-    "method": "CARD",
-    "receiver": "2100153962960000",
+    "externalID": "payout_10001",
+    "trackerID": null,
+    "currencyId": 1,
+    "method": "card",
+    "amount": "5000",
+    "commission": "250",
+    "status": "CREATED",
+    "receiver": "2200154965960000",
     "holder": "Иванов Иван Иванович",
-    "description": "Тестовая выплата",
-    "createdAt": "2025-05-26T20:55:13.968821Z",
-    "updatedAt": "2025-05-26T23:55:15.127007+03:00"
-  }
-}
-```
-
-### 9. Получение списка заявок
-#### Получение списка PayIn заявок
-**GET** `/api/v1/pay-in/list`
-
-#### Получение списка PayOut заявок
-**GET** `/api/v1/pay-out/list`
-
-## Статусы транзакций
-
-### PayIn статусы
-- `CREATED` - Заявка создана
-- `PENDING` - В ожидании реквизитов
-- `PROCESSING` - Заявка обрабатывается
-- `COMPLETED` - Заявка выполнена
-- `TIMEOUT` - Истекло время ожидания оплаты
-- `CANCELLED` - Заявка отменена
-- `ERROR` - Ошибка при обработке
-- `INCORRECT_AMOUNT` - Некорректная сумма
-- `REFUNDED` - Возвращен (выполнен откат сделки из состояния COMPLETED)
-
-### PayOut статусы
-- `CREATED` - Заявка создана
-- `PENDING` - Заявка в обработке
-- `PROCESSING` - Заявка обрабатывается
-- `COMPLETED` - Заявка выполнена
-- `TIMEOUT` - Истекло время ожидания оплаты
-- `CANCELLED` - Заявка отменена
-- `ERROR` - Ошибка при обработке
-- `INCORRECT_AMOUNT` - Некорректная сумма
-- `REFUNDED` - Возвращен (выполнен откат сделки из состояния COMPLETED)
-
-## Обработка Ошибок
-В случае ошибки ответ будет включать:
-- **message**: Описание ошибки
-- **code**: Код ошибки
-
-### Коды ошибок
-#### Ошибки аутентификации (2000-2999)
-| Код ошибки | Сообщение | HTTP статус |
-|------------|-----------|-------------|
-| 2004 | request timeout | 401 |
-| 2005 | invalid Signature | 401 |
-| 2007 | invalid NONCE | 401 |
-
-#### Общие ошибки (10000-19999)
-| Код ошибки | Сообщение | HTTP статус |
-|------------|-----------|-------------|
-| 10000 | unauthorized | 401 |
-
-#### Ошибки валидации (20000-29999)
-| Код ошибки | Сообщение | HTTP статус |
-|------------|-----------|-------------|
-| 20000 | wrong input | 400 |
-| 20001 | can't bind body to request model | 422 |
-| 20002 | can't bind query parameters | 422 |
-| 20003 | failed to parse key | 422 |
-| 20004 | signature header value missing or malformed | 400 |
-| 20005 | public-Key header value missing or malformed | 400 |
-| 20006 | nonce header value missing or outdated | 400 |
-| 20012 | invalid query params | 400 |
-| 20015 | conflict | 409 |
-| 20016 | empty external ID | 400 |
-
-#### Ошибки доступа (30000-39999)
-| Код ошибки | Сообщение | HTTP статус |
-|------------|-----------|-------------|
-| 30000 | forbidden | 403 |
-| 30001 | no access to requested session | 403 |
-| 30002 | requested sessions has expired | 403 |
-| 30003 | user doesn't exists | 403 |
-| 30004 | zero balance | 403 |
-| 30005 | not enough balance | 402 |
-| 30006 | amount less than min | 400 |
-| 30007 | amount greater than max | 400 |
-
-#### Внутренние ошибки (40000-49999)
-| Код ошибки | Сообщение | HTTP статус |
-|------------|-----------|-------------|
-| 40000 | internal error | 500 |
-
-#### Ошибки ресурсов (60000-69999)
-| Код ошибки | Сообщение | HTTP статус |
-|------------|-----------|-------------|
-| 60003 | empty Public-Key | 401 |
-| 60004 | empty nonce | 401 |
-| 60005 | empty Signature | 401 |
-| 60007 | request timeout | 408 |
-| 60008 | invalid Public-Key | 400 |
-| 60009 | empty external ID | 400 |
-| 60010 | external ID already exists | 409 |
-| 60011 | payment doesn't exists | 404 |
-| 60012 | payment is finalized | 409 |
-| 60013 | commission doesnt exists | 400 |
-| 60014 | bank doesnt exists | 400 |
-| 60015 | method doesnt exists | 400 |
-
-## Тестовые окружения
-Система поддерживает работу с различными окружениями через заголовок `X-Environment`:
-- **SANDBOX** - песочница для тестирования
-- **PRODUCTION** - продакшн окружение (по умолчанию)
-
-### Использование
-Добавьте заголовок в ваши запросы:
-```http
-X-Environment: SANDBOX
-```
-
-### Поддерживаемые методы
-#### Методы для PayIn:
-- **CARD** - Платежи банковскими картами
-- **SBP** - Система быстрых платежей
-- **ACCOUNT** - Переводы на банковские счета
-- **NSPK** - Платежи через QR код (НСПК)
-- **CROSSBORDER_CARD** - Международные переводы банковскими картами
-- **CROSSBORDER_SBP** - Международные переводы СБП
-- **M2ARM_SBP** - Трансграничный перевод в Армению по номеру телефона
-- **M2ABH_SBP** - Трансграничный перевод в Абхазию по СБП
-- **M2TJS_SBP** - Трансграничный перевод в Таджикистан по СБП
-- **M2ABH_C2C** - Трансграничный перевод в Абхазию по реквизитам карты
-- **M2ARM_C2C** - Трансграничный перевод в Армению по реквизитам карты
-- **M2TJS_C2C** - Трансграничный перевод в Таджикистан по реквизитам карты
-- **PAYMENT_LINK** - Ссылка на оплату
-- **C2C_WT** - На карту (белый треугольник)
-- **SBP_WT** - СБП (белый треугольник)
-- **SBER2SBER** - Сбер2Сбер
-- **ALFA2ALFA** - Альфа2Альфа
-- **VTB2VTB** - ВТБ2ВТБ
-- **TBANK2TBANK** - Тинькофф2Тинькофф
-- **OZON2OZON** - Озон2Озон
-- **SIM** - SIM
-- **ALFA_QR** - Альфа QR
-
-#### Методы для PayOut:
-- **CARD** - Выплаты на банковские карты
-- **SBP** - Выплаты через Систему быстрых платежей
-- **ACCOUNT** - Выплаты на банковские счета
-
-## Callback уведомления
-Система отправляет POST запросы на указанный `callbackURL` при изменении статуса транзакции.
-
-### Структура callback для PayIn:
-```json
-{
-  "id": "e42e0768-d913-4b4b-8708-f94cfeaf0777",
-  "externalID": "test_merchant_id_1",
-  "trackerID": "e42e0768-d913-4b4b-8708-f94cfeaf0777",
-  "status": "COMPLETED",
-  "amount": "2296",
-  "amountUsdt": "28.4616",
-  "commission": "4.2692",
-  "rate": "80.67",
-  "currency": "RUB",
-  "bank": "Озон Банк (OZON)",
-  "method": "CARD",
-  "receiver": "2200154965960000",
-  "paymentLink": "https://pay.tinkoff.ru/link/1234567890",
-  "holder": "Иванов Иван Иванович",
-  "description": "Тестовая транзакция",
-  "timestamp": "2024-01-01T12:00:00Z"
-}
-```
-
-### Структура callback для PayOut:
-```json
-{
-  "id": "f5ef6b73-0952-4602-a306-82ef1f755f85",
-  "externalID": "test_merchant_id_2",
-  "trackerId": "f5ef6b73-0952-4602-a306-82ef1f755f85",
-  "status": "COMPLETED",
-  "amount": "2296",
-  "amountUsdt": "28.4616",
-  "commission": "4.2692",
-  "rate": "80.67",
-  "currency": "RUB",
-  "bank": "Озон Банк (OZON)",
-  "method": "CARD",
-  "receiver": "4000000000000000",
-  "holder": "Иванов Иван Иванович",
-  "description": "Тестовая транзакция",
-  "timestamp": "2024-01-01T12:00:00Z"
-}
-```
-
-### Параметры callback
-| Параметр | Тип | Описание |
-|----------|-----|----------|
-| externalID | string | Ваш уникальный ID транзакции |
-| trackerId | string | Опциональный ID для отслеживания (если передан) |
-| status | string | Новый статус транзакции |
-| amount | string | Сумма транзакции |
-| amountUsdt | string | Сумма транзакции в USDT |
-| commission | string | Комиссия |
-| rate | string | Курс |
-| currency | string | Валюта |
-| bank | string | Банк |
-| method | string | Метод платежа/выплаты |
-| receiver | string | Реквизиты получателя |
-| paymentLink | string | Ссылка на оплату |
-| holder | string | Имя держателя карты |
-| description | string | Описание транзакции |
-| timestamp | string | Время изменения статуса в формате ISO 8601 |
-
-### Заголовки callback запроса
-```http
-Content-Type: application/json
-User-Agent: Viatrum-Callback/1.0
-```
-
-### Безопасность callback уведомлений
-Для обеспечения безопасности рекомендуется:
-1. **Проверка IP-адресов** - Ограничить доступ к callback URL только с IP-адресов Viatrum
-2. **HTTPS** - Использовать только защищенные HTTPS URL для callback
-3. **Валидация данных** - Проверять корректность полученных данных
-4. **Идемпотентность** - Обрабатывать возможные дублирующиеся уведомления
-5. **Таймауты** - Отвечать на callback запросы в течение 30 секунд
-
-### Обработка callback в коде
-#### Пример для PHP:
-```php
-<?php
-$input = file_get_contents('php://input');
-$data = json_decode($input, true);
-if ($data && isset($data['externalID'], $data['status'])) {
-    // Обработка уведомления
-    updateTransactionStatus($data['externalID'], $data['status']);
-  
-    // Возврат успешного ответа
-    http_response_code(200);
-    echo json_encode(['status' => 'success']);
-} else {
-    http_response_code(400);
-    echo json_encode(['error' => 'Invalid data']);
-}
-?>
-```
-
-#### Пример для Node.js:
-```javascript
-app.post('/callback', express.json(), (req, res) => {
-    const { externalID, status, amount, currency } = req.body;
-  
-    if (externalID && status) {
-        // Обработка уведомления
-        updateTransactionStatus(externalID, status);
-      
-        res.json({ status: 'success' });
-    } else {
-        res.status(400).json({ error: 'Invalid data' });
+    "bank": "Сбер",
+    "createdTime": "2026-05-12T14:15:00.000Z",
+    "merchant": {
+      "id": "merchant-id",
+      "username": "merchant-login",
+      "email": "merchant@example.com",
+      "callbackUrl": null,
+      "callbackSecret": null
     }
-});
-```
-
-#### Пример для Python:
-```python
-from flask import Flask, request, jsonify
-app = Flask(__name__)
-@app.route('/callback', methods=['POST'])
-def callback():
-    data = request.get_json()
-    if data and 'externalID' in data and 'status' in data:
-        # Обработка уведомления
-        update_transaction_status(data['externalID'], data['status'])
-       
-        # Возврат успешного ответа
-        return jsonify({'status' => 'success'}), 200
-    else:
-        return jsonify({'error' => 'Invalid data'}), 400
-if __name__ == '__main__':
-    app.run(port=3000)
-```
-
-### Обработка callback
-1. **Ваш сервер должен отвечать HTTP 200** для подтверждения получения
-2. **Время ожидания ответа**: 30 секунд
-3. **Повторные попытки**: В случае ошибки система выполнит до 3 повторных попыток
-4. **Безопасность**: Рекомендуется проверять IP-адрес отправителя
-
-### Пример обработки callback (PHP)
-```php
-<?php
-// Получаем данные callback
-$input = file_get_contents('php://input');
-$data = json_decode($input, true);
-if ($data) {
-    $externalID = $data['externalID'];
-    $status = $data['status'];
-    $amount = $data['amount'];
-  
-    // Обновляем статус транзакции в вашей системе
-    updateTransactionStatus($externalID, $status);
-  
-    // Возвращаем успешный ответ
-    http_response_code(200);
-    echo 'OK';
-} else {
-    http_response_code(400);
-    echo 'Invalid data';
+  }
 }
-?>
-```
-
-### Пример обработки callback (Node.js)
-```javascript
-const express = require('express');
-const app = express();
-app.use(express.json());
-app.post('/callback', (req, res) => {
-    const { externalID, status, amount, currency, method, timestamp } = req.body;
-  
-    // Обновляем статус транзакции в вашей системе
-    updateTransactionStatus(externalID, status);
-  
-    // Возвращаем успешный ответ
-    res.status(200).send('OK');
-});
-app.listen(3000, () => {
-    console.log('Callback server running on port 3000');
-});
-```
-
-### Пример обработки callback (Python)
-```python
-from flask import Flask, request
-app = Flask(__name__)
-@app.route('/callback', methods=['POST'])
-def callback():
-    data = request.get_json()
-    if data and 'externalID' in data and 'status' in data:
-        external_id = data['externalID']
-        status = data['status']
-        amount = data['amount']
-       
-        # Обновляем статус транзакции в вашей системе
-        update_transaction_status(external_id, status)
-       
-        # Возвращаем успешный ответ
-        return 'OK', 200
-    else:
-        return 'Invalid data', 400
-if __name__ == '__main__':
-    app.run(port=3000)
 ```
 
 ---
-*Данная документация регулярно обновляется. Следите за изменениями и новыми возможностями API.*
+
+## 8. Апелляции PayIn
+
+### 8.1. Создание апелляции
+
+```http
+POST /api/v1/pay-in/appeals
+```
+
+#### Body
+
+| Поле | Тип | Обязательное | Описание |
+|---|---|---:|---|
+| `transactionId` | string UUID | Да | ID PayIn заявки. |
+| `appealReason` | string | Да | Причина апелляции. |
+| `appealText` | string | Нет | Текст до 1000 символов. Обязателен для причины `OTHER`. |
+| `receiptUrl` | string | Нет | URL чека/скриншота. |
+| `receiptType` | string | Нет | Тип файла, например `jpg`, `png`, `pdf`. |
+
+#### `appealReason`
+
+```text
+TRADER_NOT_CONFIRM_PAYMENT
+INVOICE_EXPIRED_WITH_PAYMENT
+PAYMENT_NOT_RECIEVED
+NEW_AMOUNT
+OVERPAYMENT
+BUYER_PAID_LESS
+CONFIRMATION_DOCUMENTS
+BANK_ACCOUNT_FROZEN
+FRAUD
+MALICIOUS_ORDER_CANCELLATION
+OTHER
+```
+
+#### Пример запроса
+
+```json
+{
+  "transactionId": "1e6ba508-4b9d-45a0-b297-9f8b14ce7d9b",
+  "appealReason": "PAYMENT_NOT_RECIEVED",
+  "appealText": "Плательщик отправил оплату, но статус не изменился",
+  "receiptUrl": "https://merchant.example/files/receipt-10003.jpg",
+  "receiptType": "jpg"
+}
+```
+
+#### Пример ответа
+
+```json
+{
+  "success": true,
+  "data": {
+    "id": "a2b76f3f-97fb-4d17-b9ce-53d5f3fa44f1",
+    "transactionId": "1e6ba508-4b9d-45a0-b297-9f8b14ce7d9b",
+    "appealState": "APPEALED",
+    "appealReason": "PAYMENT_NOT_RECIEVED",
+    "appealText": "Плательщик отправил оплату, но статус не изменился",
+    "receiptUrl": "https://merchant.example/files/receipt-10003.jpg",
+    "receiptType": "jpg",
+    "createdAt": "2026-05-12T14:20:00.000Z",
+    "updatedAt": "2026-05-12T14:20:00.000Z"
+  }
+}
+```
+
+### 8.2. Список апелляций
+
+```http
+GET /api/v1/pay-in/appeals?offset=0&limit=10
+```
+
+Query параметры:
+
+| Параметр | Тип | Описание |
+|---|---|---|
+| `id` | UUID | Фильтр по ID апелляции. |
+| `transactionId` | UUID | Фильтр по PayIn ID. |
+| `appealState` | string | `NOT_SET`, `APPEALED`, `USER_SUCCESS`, `TRADER_SUCCESS`. |
+| `appealReason` | string | Причина апелляции. |
+| `offset` | number | Смещение. |
+| `limit` | number | Количество, максимум `100`. |
+
+---
+
+## 9. Callback уведомления
+
+Callback отправляется POST-запросом на `callbackURL`, указанный при создании заявки.
+
+### Headers callback
+
+```http
+Content-Type: application/json
+```
+
+Текущая реализация не подписывает callback отдельным HMAC header-ом. Для безопасности рекомендуется проверять HTTPS endpoint, IP-allowlist и идемпотентность по `id`/`externalID`/`status`.
+
+### PayIn callback
+
+Основной PayIn callback содержит те же ключевые поля, что и ответ создания/получения PayIn.
+
+```json
+{
+  "id": "1e6ba508-4b9d-45a0-b297-9f8b14ce7d9b",
+  "externalID": "order_nspk_10003",
+  "trackerID": "tr_nspk_125",
+  "trackerId": "1e6ba508-4b9d-45a0-b297-9f8b14ce7d9b",
+  "method": "NSPK",
+  "amount": "1000",
+  "amountUsdt": "12.31",
+  "commission": "0.74",
+  "rate": "81.20",
+  "currency": "RUB",
+  "bank": "Сбер",
+  "status": "COMPLETED",
+  "holder": null,
+  "receiver": "https://qr.nspk.ru/BS1A...",
+  "payment_link": "https://qr.nspk.ru/BS1A...",
+  "image_qr": null,
+  "description": "NSPK order #10003",
+  "timestamp": "2026-05-12T14:25:00.000Z"
+}
+```
+
+`trackerId` может дополнительно добавляться сервисом отправки callback. Значение зависит от места отправки: при ручной отправке это может быть ID PayIn, при автоматической — provider tracker.
+
+### PayOut callback
+
+```json
+{
+  "externalID": "payout_10001",
+  "status": "COMPLETED",
+  "amount": "5000",
+  "currency": 1,
+  "method": "card",
+  "receiver": "2200154965960000",
+  "timestamp": "2026-05-12T14:25:00.000Z",
+  "trackerId": "pay-out-f5ef6b73-0952-4602-a306-82ef1f755f85"
+}
+```
+
+### Обработка callback на стороне мерчанта
+
+1. Возвращайте HTTP `200` после успешной обработки.
+2. Делайте обработку идемпотентной: один и тот же статус может прийти повторно.
+3. Не считайте порядок callback гарантированным; всегда проверяйте текущий статус заявки через API при спорных ситуациях.
+4. Используйте `externalID` как ваш основной ключ, а `id` — как ID заявки Viatrum.
+
+---
+
+## 10. Статусы
+
+### PayIn / PayOut статусы
+
+| Статус | Описание |
+|---|---|
+| `CREATED` | Заявка создана. |
+| `PENDING` | Ожидание получения реквизитов или промежуточная обработка. |
+| `PROCESSING` | Реквизиты выданы, ожидается оплата/исполнение. |
+| `COMPLETED` | Успешно завершена. |
+| `TIMEOUT` | Истекло время оплаты/исполнения. |
+| `CANCELLED` | Отменена. |
+| `DISPUTE` | Спор. |
+| `ERROR` | Ошибка. |
+| `INCORRECT_AMOUNT` | Оплата прошла на некорректную сумму. |
+| `REFUNDED` | Возврат/откат из завершенного состояния. |
+
+---
+
+## 11. Ошибки
+
+### Частые ошибки аутентификации
+
+| Код | Сообщение | Причина |
+|---:|---|---|
+| `2001` | `empty Public Key` | Нет `Public-Key` / `Api-Key`. |
+| `2002` | `empty NONCE` | Нет `Nonce` / `Expires`. |
+| `2003` | `empty Signature` | Нет `Signature`. |
+| `2004` | `request timeout` | `Nonce` меньше текущего времени сервера. |
+| `2005` | `invalid Signature` | Неверная подпись. |
+| `2006` | `invalid Public Key` | Ключ не найден. |
+| `2007` | `invalid NONCE` | `Nonce` уже использован или меньше предыдущего. |
+
+### Частые бизнес-ошибки
+
+| Код | Сообщение | Причина |
+|---:|---|---|
+| `30003` | `Merchant not found` | Мерчант не найден по ключу. |
+| `60010` | `externalID already exists` | Дубликат `externalID`. |
+| `60011` | `payment doesn't exists` | PayIn не найден. |
+| `60013` | `commission doesnt exists` / provider error | Нет комиссии или ошибка обработки. |
+| `60014` | `bank doesnt exists` | Банк не найден или недоступен. |
+| `60015` | `method doesnt exists` | Метод не поддерживается. |
+
+### Пример ошибки валидации
+
+```json
+{
+  "success": false,
+  "error": {
+    "message": [
+      "ID может содержать только латинские буквы, цифры, дефис и подчеркивание"
+    ],
+    "code": 20000
+  }
+}
+```
+
+---
+
+## 12. Полный пример cURL для `PAYMENT_LINK`
+
+```bash
+curl -X POST 'https://<your-api-domain>/api/v1/pay-in' \
+  -H 'Content-Type: application/json' \
+  -H 'Public-Key: your_public_key' \
+  -H 'Nonce: 1770000000000001' \
+  -H 'Signature: calculated_hmac_sha512_signature' \
+  -H 'X-Environment: SANDBOX' \
+  -d '{
+    "bankId": 1,
+    "externalID": "order_link_10004",
+    "currencyId": 1,
+    "callbackURL": "https://merchant.example/callbacks/payin",
+    "description": "Payment link order #10004",
+    "amount": "1000.00",
+    "method": "PAYMENT_LINK"
+  }'
+```
+
+---
+
+## 13. Краткий чек-лист интеграции
+
+- Получите `Public-Key` и private/secret key.
+- Для каждого запроса генерируйте новый будущий `Nonce`.
+- Подписывайте `path + sortedBody + nonce`; query string не включайте.
+- Для PayIn используйте `payment_link` как единственное публичное поле ссылки на оплату.
+- Для `NSPK` и `PAYMENT_LINK` показывайте ссылку из `payment_link`; `receiver` дублирует ее для UI.
+- Обрабатывайте callback идемпотентно и отвечайте HTTP `200`.
