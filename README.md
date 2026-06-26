@@ -47,115 +47,283 @@ https://<your-api-domain>
 
 ## 2. Аутентификация HMAC
 
-Каждый запрос к `/api/v1/*` должен быть подписан.
+Каждый запрос к `/api/v1/*` должен быть подписан. Актуальный контракт — **Merchant HMAC v2**.
 
-### Обязательные headers
+> Важно: этот раздел описывает входящие запросы мерчанта к Viatrum API. Исходящие callback-уведомления от Viatrum мерчанту подписываются отдельно заголовками `X-Viatrum-*`, см. [Callback уведомления](#9-callback-уведомления).
+
+### 2.1. Обязательные headers
 
 | Header | Обязательный | Описание |
 |---|---:|---|
-| `Content-Type` | Да | `application/json` |
-| `Public-Key` | Да | Публичный ключ мерчанта. Также поддерживается legacy header `Api-Key`. |
-| `Nonce` | Да | Числовое значение, больше предыдущего. Также поддерживается legacy header `Expires`. |
-| `Signature` | Да | HMAC-SHA512 подпись. |
-| `X-Environment` | Нет | `PRODUCTION`, `SANDBOX` или `TEST`. По умолчанию `PRODUCTION`. |
+| `Content-Type` | Да | `application/json` для запросов с JSON body. |
+| `Api-Key` | Да | Публичный ключ мерчанта. Также принимается `Public-Key`. |
+| `Nonce` | Да | Числовой nonce. Также принимается legacy header `Expires`. |
+| `Signature` | Да | HMAC-SHA512 подпись в hex. |
+| `X-Environment` | Рекомендуется | `PRODUCTION`, `SANDBOX` или `TEST`. Если не передан, backend использует `PRODUCTION`. |
 
-### Важное про `Nonce`
+Рекомендуемый набор headers:
 
-В текущей реализации `Nonce` одновременно используется как защита от replay и как время жизни запроса:
+```http
+Content-Type: application/json
+Api-Key: <merchant_public_key>
+Nonce: <nonce>
+Signature: <hmac_sha512_hex>
+X-Environment: PRODUCTION
+```
 
-1. Значение должно быть числом.
-2. Значение должно быть строго больше предыдущего успешного `Nonce` этого мерчанта.
-3. Значение должно быть больше текущего времени сервера в миллисекундах, иначе будет ошибка `request timeout`.
+### 2.2. `Nonce` для HMAC v2
 
-Практический вариант: передавайте будущий timestamp в миллисекундах, например `Date.now() + 300000`, и добавляйте небольшой монотонный счетчик для параллельных запросов.
+`Nonce` одновременно используется как защита от replay и как время жизни запроса.
+
+Правила:
+
+1. Значение должно состоять только из цифр.
+2. Значение должно быть timestamp в миллисекундах в будущем.
+3. Значение должно быть не дальше допустимого окна в будущем. В текущей production-конфигурации окно — 5 минут.
+4. Значение должно быть строго больше предыдущего успешно принятого nonce этого мерчанта.
+
+Рекомендуемый генератор:
 
 ```javascript
-let counter = 0;
+let lastNonce = 0;
 
 function generateNonce() {
-  const expiresAtMs = Date.now() + 5 * 60 * 1000;
-  const suffix = String(counter++ % 1000).padStart(3, '0');
-  return `${expiresAtMs}${suffix}`;
+  const base = Date.now() + 60_000; // +60 секунд
+  const next = Math.max(base, lastNonce + 1);
+  lastNonce = next;
+  return String(next);
 }
 ```
 
-### Строка для подписи
+Не добавляйте к nonce длинные суффиксы вида `Date.now() + counter + random` для новых интеграций. Такой формат поддерживается только временно в legacy-режиме HMAC v1.
+
+### 2.3. Canonical string HMAC v2
+
+Подпись считается от строки:
 
 ```text
-path + bodyString + nonce
+METHOD
+PATH
+SORTED_QUERY
+SHA256_RAW_BODY
+NONCE
 ```
 
 Где:
 
 | Часть | Описание |
 |---|---|
-| `path` | Только pathname без домена и query string. Например `/api/v1/pay-in/list`. |
-| `bodyString` | Для `POST`, `PUT`, `PATCH` — JSON body с отсортированными ключами. Для `GET` — пустая строка. |
-| `nonce` | То же значение, которое передается в header `Nonce`. |
+| `METHOD` | HTTP method в верхнем регистре: `GET`, `POST`, `PATCH`, `PUT`, `DELETE`. |
+| `PATH` | Только pathname без домена. Например `/api/v1/pay-in`. |
+| `SORTED_QUERY` | Query string, отсортированный по ключу и значению, без ведущего `?`. Если query нет — пустая строка. |
+| `SHA256_RAW_BODY` | SHA256 от raw body в hex. Для пустого body — SHA256 от пустой строки. |
+| `NONCE` | То же значение, которое передается в header `Nonce`. |
 
-Query параметры в текущей backend-реализации **не входят** в подпись. Например запрос:
-
-```text
-GET /api/v1/pay-in/list?offset=0&limit=10
-```
-
-подписывается как:
+Если query-параметров нет, третья строка остается пустой. Например:
 
 ```text
-/api/v1/pay-in/list{nonce}
+POST
+/api/v1/pay-in
+
+9f4e8e2c7c6f0b6e0f0e0c4a...
+1760000060000
 ```
 
-### JavaScript пример подписи
+### 2.4. Правило для body
+
+Подписывается SHA256 от **raw body ровно в том виде, в котором он отправляется в HTTP-запрос**.
+
+Практическое правило:
+
+1. Сформируйте JSON-строку один раз.
+2. Посчитайте SHA256 от этой строки.
+3. Эту же строку отправьте как request body.
+
+Не сортируйте JSON body для HMAC v2. Сортировка body относится только к legacy HMAC v1.
+
+Для пустого body используйте SHA256 от пустой строки:
+
+```text
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+```
+
+### 2.5. JavaScript пример HMAC v2
 
 ```javascript
 const crypto = require('crypto');
 
-function sortObjectKeys(value) {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    return value;
-  }
+let lastNonce = 0;
 
-  return Object.keys(value)
-    .sort()
-    .reduce((acc, key) => {
-      acc[key] = sortObjectKeys(value[key]);
-      return acc;
-    }, {});
+function generateNonce() {
+  const base = Date.now() + 60_000;
+  const next = Math.max(base, lastNonce + 1);
+  lastNonce = next;
+  return String(next);
 }
 
-function signRequest({ path, method, body, nonce, privateKey }) {
-  const shouldSignBody = method.toUpperCase() !== 'GET' && body;
-  const bodyString = shouldSignBody
-    ? JSON.stringify(sortObjectKeys(body))
-    : '';
+function buildSortedQuery(urlOrQuery) {
+  const url = new URL(urlOrQuery, 'https://api.example');
+  const entries = Array.from(url.searchParams.entries()).sort(
+    ([keyA, valueA], [keyB, valueB]) =>
+      keyA === keyB
+        ? valueA.localeCompare(valueB)
+        : keyA.localeCompare(keyB),
+  );
 
-  const stringToSign = `${path}${bodyString}${nonce}`;
-  const signature = crypto
-    .createHmac('sha512', privateKey)
-    .update(stringToSign)
+  return entries
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .join('&');
+}
+
+function signRequest({ method, path, query = '', rawBody = '', nonce, secretKey }) {
+  const bodyHash = crypto
+    .createHash('sha256')
+    .update(rawBody, 'utf8')
     .digest('hex');
 
-  return { stringToSign, signature };
+  const sortedQuery = buildSortedQuery(`${path}${query ? `?${query}` : ''}`);
+
+  const canonicalString = [
+    method.toUpperCase(),
+    path,
+    sortedQuery,
+    bodyHash,
+    nonce,
+  ].join('\n');
+
+  const signature = crypto
+    .createHmac('sha512', secretKey)
+    .update(canonicalString, 'utf8')
+    .digest('hex');
+
+  return { bodyHash, canonicalString, signature };
 }
 
 const body = {
-  amount: '1000',
   bankId: 1,
-  callbackURL: 'https://merchant.example/callback',
-  currencyId: 1,
   externalID: 'order_10001',
-  method: 'CARD'
+  currencyId: 1,
+  callbackURL: 'https://merchant.example/callbacks/payin',
+  amount: '6543.00',
+  method: 'CARD',
 };
 
+const rawBody = JSON.stringify(body);
 const nonce = generateNonce();
-const { stringToSign, signature } = signRequest({
-  path: '/api/v1/pay-in',
+const { signature } = signRequest({
   method: 'POST',
-  body,
+  path: '/api/v1/pay-in',
+  rawBody,
   nonce,
-  privateKey: 'your_private_key'
+  secretKey: '<merchant_secret_key>',
 });
+
+const headers = {
+  'Content-Type': 'application/json',
+  'Api-Key': '<merchant_public_key>',
+  'Nonce': nonce,
+  'Signature': signature,
+  'X-Environment': 'PRODUCTION',
+};
 ```
+
+### 2.6. Postman pre-request script HMAC v2
+
+```javascript
+let lastNonce = Number(pm.environment.get('last_nonce') || '0');
+
+function generateNonce() {
+  const base = Date.now() + 60_000;
+  const next = Math.max(base, lastNonce + 1);
+  lastNonce = next;
+  pm.environment.set('last_nonce', String(next));
+  return String(next);
+}
+
+function buildSortedQuery() {
+  const queryItems = pm.request.url.query ? pm.request.url.query.all() : [];
+
+  const activeItems = queryItems
+    .filter((item) => !item.disabled && item.key)
+    .map((item) => [
+      pm.variables.replaceIn(String(item.key)),
+      pm.variables.replaceIn(String(item.value ?? '')),
+    ])
+    .sort((a, b) => {
+      if (a[0] === b[0]) return a[1].localeCompare(b[1]);
+      return a[0].localeCompare(b[0]);
+    });
+
+  if (activeItems.length === 0) return '';
+
+  const params = new URLSearchParams();
+  for (const [key, value] of activeItems) {
+    params.append(key, value);
+  }
+  return params.toString();
+}
+
+const crypto = require('crypto-js');
+
+const method = pm.request.method.toUpperCase();
+const path = pm.variables.replaceIn(pm.request.url.getPath());
+const sortedQuery = buildSortedQuery();
+const secretKey = pm.environment.get('merchant_secret_key');
+
+let rawBody = '';
+if (pm.request.body && pm.request.body.raw) {
+  rawBody = pm.variables.replaceIn(pm.request.body.raw);
+}
+
+const bodyHash = crypto
+  .SHA256(crypto.enc.Utf8.parse(rawBody))
+  .toString(crypto.enc.Hex);
+
+const nonce = generateNonce();
+const canonicalString = [method, path, sortedQuery, bodyHash, nonce].join('\n');
+const signature = crypto
+  .HmacSHA512(canonicalString, secretKey)
+  .toString(crypto.enc.Hex);
+
+pm.environment.set('nonce', nonce);
+pm.environment.set('signature', signature);
+
+console.log('=== VIATRUM HMAC V2 DEBUG ===');
+console.log('Canonical string:', canonicalString);
+console.log('Signature:', signature);
+console.log('=== END DEBUG ===');
+```
+
+Headers в Postman:
+
+```http
+Content-Type: application/json
+Api-Key: {{merchant_public_key}}
+Nonce: {{nonce}}
+Signature: {{signature}}
+X-Environment: PRODUCTION
+```
+
+### 2.7. Legacy HMAC v1 во время миграции
+
+Legacy HMAC v1 поддерживается временно только для обратной совместимости. Новые интеграции должны использовать HMAC v2.
+
+Legacy canonical string:
+
+```text
+path + sortedJsonBody + nonce
+```
+
+Особенности HMAC v1:
+
+- query string не входит в подпись;
+- JSON body сортируется по ключам перед подписью;
+- используется HMAC-SHA512;
+- legacy nonce может иметь вид `<Date.now()><counter><random>`, например `176000000000000042`;
+- полный legacy nonce участвует в подписи и replay-check;
+- для проверки времени backend использует первые 13 цифр как timestamp в миллисекундах.
+
+Если мерчант уже использовал длинные legacy nonce, при переходе на HMAC v2 может потребоваться сброс nonce-state на стороне Viatrum, потому что новый timestamp nonce будет численно меньше старого legacy nonce. Согласуйте переход с поддержкой Viatrum.
 
 ---
 
@@ -932,15 +1100,116 @@ Query параметры:
 
 Callback отправляется POST-запросом на `callbackURL`, указанный при создании заявки.
 
-### Headers callback
+### 9.1. Подпись callback от Viatrum
+
+Viatrum подписывает исходящие callback-уведомления HMAC-SHA256. Мерчант должен проверять подпись по raw body, timestamp и event id.
+
+Headers callback:
 
 ```http
 Content-Type: application/json
+X-Viatrum-Timestamp: <unix_timestamp_seconds>
+X-Viatrum-Event-Id: <event_id>
+X-Viatrum-Key-Id: <key_id>
+X-Viatrum-Signature: v1=<hmac_sha256_hex>
 ```
 
-Текущая реализация не подписывает callback отдельным HMAC header-ом. Для безопасности рекомендуется проверять HTTPS endpoint, IP-allowlist и идемпотентность по `id`/`externalID`/`status`.
+Canonical string для проверки подписи:
 
-### PayIn callback
+```text
+v1
+timestamp
+eventId
+POST
+path?sortedQuery
+SHA256_RAW_BODY
+```
+
+Где:
+
+| Часть | Описание |
+|---|---|
+| `v1` | Версия схемы подписи. |
+| `timestamp` | Значение header `X-Viatrum-Timestamp`. |
+| `eventId` | Значение header `X-Viatrum-Event-Id`. |
+| `POST` | HTTP method callback-запроса. |
+| `path?sortedQuery` | Path callback URL с отсортированным query string. Домен не включается. |
+| `SHA256_RAW_BODY` | SHA256 от raw body callback-запроса в hex. |
+
+Подпись:
+
+```text
+HMAC-SHA256(callbackSecret, canonicalString)
+```
+
+`X-Viatrum-Signature` должен иметь формат:
+
+```text
+v1=<hex_signature>
+```
+
+Проверяйте, что timestamp находится в допустимом окне, например ±5 минут, и дедуплицируйте события по `X-Viatrum-Event-Id`.
+
+### 9.2. JavaScript пример проверки callback
+
+```javascript
+const crypto = require('crypto');
+
+function extractPathWithSortedQuery(callbackUrl) {
+  const url = new URL(callbackUrl);
+  url.searchParams.sort();
+  const query = url.searchParams.toString();
+  return query ? `${url.pathname}?${query}` : url.pathname;
+}
+
+function verifyViatrumCallback({
+  rawBody,
+  callbackUrl,
+  callbackSecret,
+  timestamp,
+  eventId,
+  signatureHeader,
+  toleranceSeconds = 300,
+}) {
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const timestampSeconds = Number(timestamp);
+  if (!Number.isFinite(timestampSeconds)) return false;
+  if (Math.abs(nowSeconds - timestampSeconds) > toleranceSeconds) return false;
+
+  const [version, receivedSignature] = String(signatureHeader || '').split('=');
+  if (version !== 'v1' || !/^[a-f0-9]{64}$/i.test(receivedSignature || '')) {
+    return false;
+  }
+
+  const bodyHash = crypto
+    .createHash('sha256')
+    .update(rawBody, 'utf8')
+    .digest('hex');
+
+  const canonicalString = [
+    'v1',
+    String(timestamp),
+    String(eventId),
+    'POST',
+    extractPathWithSortedQuery(callbackUrl),
+    bodyHash,
+  ].join('\n');
+
+  const expectedSignature = crypto
+    .createHmac('sha256', callbackSecret)
+    .update(canonicalString, 'utf8')
+    .digest('hex');
+
+  return crypto.timingSafeEqual(
+    Buffer.from(expectedSignature, 'hex'),
+    Buffer.from(receivedSignature, 'hex'),
+  );
+}
+```
+
+Важно: используйте именно raw body, полученный HTTP-сервером, а не повторно сериализованный JSON-объект.
+
+### 9.3. PayIn callback
 
 Основной PayIn callback содержит те же ключевые поля, что и ответ создания/получения PayIn.
 
@@ -969,7 +1238,7 @@ Content-Type: application/json
 
 `trackerId` может дополнительно добавляться сервисом отправки callback. Значение зависит от места отправки: при ручной отправке это может быть ID PayIn, при автоматической — provider tracker.
 
-### PayOut callback
+### 9.4. PayOut callback
 
 ```json
 {
@@ -984,12 +1253,14 @@ Content-Type: application/json
 }
 ```
 
-### Обработка callback на стороне мерчанта
+### 9.5. Обработка callback на стороне мерчанта
 
-1. Возвращайте HTTP `200` после успешной обработки.
-2. Делайте обработку идемпотентной: один и тот же статус может прийти повторно.
-3. Не считайте порядок callback гарантированным; всегда проверяйте текущий статус заявки через API при спорных ситуациях.
-4. Используйте `externalID` как ваш основной ключ, а `id` — как ID заявки Viatrum.
+1. Проверяйте `X-Viatrum-Signature` до обработки payload.
+2. Проверяйте `X-Viatrum-Timestamp`, чтобы отсекать replay старых callback.
+3. Делайте обработку идемпотентной по `X-Viatrum-Event-Id` и/или по `id`/`externalID`/`status`.
+4. Возвращайте HTTP `200` после успешной обработки.
+5. Не считайте порядок callback гарантированным; всегда проверяйте текущий статус заявки через API при спорных ситуациях.
+6. Используйте `externalID` как ваш основной ключ, а `id` — как ID заявки Viatrum.
 
 ---
 
@@ -1018,13 +1289,13 @@ Content-Type: application/json
 
 | Код | Сообщение | Причина |
 |---:|---|---|
-| `2001` | `empty Public Key` | Нет `Public-Key` / `Api-Key`. |
+| `2001` | `empty Public Key` | Нет `Api-Key` / `Public-Key`. |
 | `2002` | `empty NONCE` | Нет `Nonce` / `Expires`. |
 | `2003` | `empty Signature` | Нет `Signature`. |
-| `2004` | `request timeout` | `Nonce` меньше текущего времени сервера. |
-| `2005` | `invalid Signature` | Неверная подпись. |
+| `2004` | `request timeout` | `Nonce` меньше текущего времени сервера или legacy timestamp устарел. |
+| `2005` | `invalid Signature` | Неверная HMAC-подпись. Проверьте canonical string, secret key, raw body и query. |
 | `2006` | `invalid Public Key` | Ключ не найден. |
-| `2007` | `invalid NONCE` | `Nonce` уже использован или меньше предыдущего. |
+| `2007` | `invalid NONCE` / `NONCE is too far in the future` / `invalid NONCE format` | `Nonce` уже использован, меньше предыдущего, не является числом, слишком длинный или слишком далеко в будущем. |
 
 ### Частые бизнес-ошибки
 
@@ -1053,33 +1324,43 @@ Content-Type: application/json
 
 ---
 
-## 12. Полный пример cURL для `PAYMENT_LINK`
+## 12. Полный пример cURL для `PAYMENT_LINK` с HMAC v2
 
 ```bash
+BODY='{"bankId":1,"externalID":"order_link_10004","currencyId":1,"callbackURL":"https://merchant.example/callbacks/payin","description":"Payment link order #10004","amount":"1000.00","method":"PAYMENT_LINK"}'
+NONCE=$(node -e 'console.log(Date.now() + 60000)')
+BODY_HASH=$(printf '%s' "$BODY" | openssl dgst -sha256 -hex | awk '{print $2}')
+
+CANONICAL="POST
+/api/v1/pay-in
+
+$BODY_HASH
+$NONCE"
+
+SIGNATURE=$(printf '%s' "$CANONICAL" \
+  | openssl dgst -sha512 -hmac '<merchant_secret_key>' -hex \
+  | awk '{print $2}')
+
 curl -X POST 'https://<your-api-domain>/api/v1/pay-in' \
   -H 'Content-Type: application/json' \
-  -H 'Public-Key: your_public_key' \
-  -H 'Nonce: 1770000000000001' \
-  -H 'Signature: calculated_hmac_sha512_signature' \
+  -H 'Api-Key: <merchant_public_key>' \
+  -H "Nonce: $NONCE" \
+  -H "Signature: $SIGNATURE" \
   -H 'X-Environment: SANDBOX' \
-  -d '{
-    "bankId": 1,
-    "externalID": "order_link_10004",
-    "currencyId": 1,
-    "callbackURL": "https://merchant.example/callbacks/payin",
-    "description": "Payment link order #10004",
-    "amount": "1000.00",
-    "method": "PAYMENT_LINK"
-  }'
+  --data "$BODY"
 ```
 
 ---
 
 ## 13. Краткий чек-лист интеграции
 
-- Получите `Public-Key` и private/secret key.
-- Для каждого запроса генерируйте новый будущий `Nonce`.
-- Подписывайте `path + sortedBody + nonce`; query string не включайте.
+- Получите `Api-Key`/public key и secret key.
+- Для новых интеграций используйте HMAC v2: `METHOD\nPATH\nSORTED_QUERY\nSHA256_RAW_BODY\nNONCE`.
+- Для каждого запроса генерируйте новый `Nonce`: timestamp в миллисекундах в будущем, обычно `Date.now() + 60000`.
+- Подписывайте SHA256 от raw body и отправляйте ровно тот же body.
+- Query string в HMAC v2 входит в подпись в отсортированном виде.
+- Старый HMAC v1 (`path + sortedJsonBody + nonce`) поддерживается только временно на период миграции.
 - Для PayIn используйте `payment_link` как единственное публичное поле ссылки на оплату.
 - Для `NSPK` и `PAYMENT_LINK` показывайте ссылку из `payment_link`; `receiver` дублирует ее для UI.
+- Проверяйте подпись callback от Viatrum по `X-Viatrum-Signature`.
 - Обрабатывайте callback идемпотентно и отвечайте HTTP `200`.
